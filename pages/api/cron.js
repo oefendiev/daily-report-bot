@@ -17,13 +17,13 @@ export default async function handler(req, res) {
 
     await slackPost("chat.postMessage", {
       channel: channelId,
-      text: "Time to submit your daily report 📋",
+      text: "Time to submit your daily report",
       blocks: [
         {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: "Hey! 👋 Time to submit your daily report.\nI'll pull your Jira tasks for today automatically.",
+            text: "Hey! Time to submit your daily report.\nI will pull your Jira tasks for today automatically.",
           },
         },
         {
@@ -31,7 +31,7 @@ export default async function handler(req, res) {
           elements: [
             {
               type: "button",
-              text: { type: "plain_text", text: "✍️ Fill in report", emoji: true },
+              text: { type: "plain_text", text: "Fill in report", emoji: true },
               style: "primary",
               action_id: "open_report_modal",
             },
@@ -44,4 +44,3 @@ export default async function handler(req, res) {
 
   res.status(200).json({ ok: true, sent });
 }
-EOF

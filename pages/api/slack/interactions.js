@@ -11,8 +11,8 @@ function getRawBody(req) {
   });
 }
 
-function buildModal() {
-  const taskBlock = (n, optional) => [
+function taskBlock(n, optional) {
+  return [
     {
       type: "input",
       block_id: `task_${n}_name`,
@@ -49,38 +49,62 @@ function buildModal() {
       optional,
       element: { type: "plain_text_input", action_id: "value", placeholder: { type: "plain_text", text: "2.5" } },
     },
+    { type: "divider" },
   ];
+}
 
+function buildModal(count) {
+  const blocks = [];
+  for (let n = 1; n <= count; n++) {
+    blocks.push(...taskBlock(n, n > 1));
+  }
+  if (count < 8) {
+    blocks.push({
+      type: "actions",
+      block_id: "add_task_action",
+      elements: [{
+        type: "button",
+        text: { type: "plain_text", text: "➕ Add task", emoji: true },
+        action_id: "add_task",
+      }],
+    });
+  }
   return {
     type: "modal",
     callback_id: "daily_report_submit",
+    private_metadata: String(count),
     title: { type: "plain_text", text: "Daily Report" },
     submit: { type: "plain_text", text: "Submit" },
     close: { type: "plain_text", text: "Cancel" },
-    blocks: [
-      ...taskBlock(1, false),
-      { type: "divider" },
-      ...taskBlock(2, true),
-      { type: "divider" },
-      ...taskBlock(3, true),
-    ],
+    blocks,
   };
 }
 
 async function handleBlockActions(payload, res) {
   const action = payload.actions?.[0];
-  if (action?.action_id !== "open_report_modal") return res.status(200).end();
-  await slackPost("views.open", { trigger_id: payload.trigger_id, view: buildModal() });
+
+  if (action?.action_id === "open_report_modal") {
+    await slackPost("views.open", { trigger_id: payload.trigger_id, view: buildModal(1) });
+    return res.status(200).end();
+  }
+
+  if (action?.action_id === "add_task") {
+    const count = parseInt(payload.view.private_metadata || "1") + 1;
+    await slackPost("views.update", { view_id: payload.view.id, view: buildModal(count) });
+    return res.status(200).end();
+  }
+
   return res.status(200).end();
 }
 
 async function handleViewSubmission(payload, res) {
   const values = payload.view.state.values;
+  const count = parseInt(payload.view.private_metadata || "1");
   const userName = payload.user.name;
   const date = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   const lines = [`*📋 Daily Report — ${date} — @${userName}*`];
 
-  for (let n = 1; n <= 3; n++) {
+  for (let n = 1; n <= count; n++) {
     const name = values[`task_${n}_name`]?.value?.value;
     if (!name) continue;
     const status = values[`task_${n}_status`]?.value?.selected_option?.text?.text || "";

@@ -1,3 +1,4 @@
+cat > ~/daily-report-bot/pages/api/cron.js << 'EOF'
 import { getWorkspaceUsers, slackPost } from "../../lib/slack";
 
 export default async function handler(req, res) {
@@ -5,23 +6,25 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
+  const allowedEmails = (process.env.ALLOWED_EMAILS || "").split(",").map(e => e.trim().toLowerCase());
   const users = await getWorkspaceUsers();
-  let sent = 0;
+  const filtered = users.filter(u => allowedEmails.includes(u.profile?.email?.toLowerCase()));
 
-  for (const user of users) {
+  let sent = 0;
+  for (const user of filtered) {
     const dm = await slackPost("conversations.open", { users: user.id });
     const channelId = dm.channel?.id;
     if (!channelId) continue;
 
     await slackPost("chat.postMessage", {
       channel: channelId,
-      text: "Время заполнить отчёт за день 📋",
+      text: "Time to submit your daily report 📋",
       blocks: [
         {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: "Привет! 👋 Время заполнить отчёт за день.\nЯ подтяну твои задачи из Jira автоматически.",
+            text: "Hey! 👋 Time to submit your daily report.\nI'll pull your Jira tasks for today automatically.",
           },
         },
         {
@@ -29,7 +32,7 @@ export default async function handler(req, res) {
           elements: [
             {
               type: "button",
-              text: { type: "plain_text", text: "✍️ Заполнить отчёт", emoji: true },
+              text: { type: "plain_text", text: "✍️ Fill in report", emoji: true },
               style: "primary",
               action_id: "open_report_modal",
             },
@@ -42,3 +45,4 @@ export default async function handler(req, res) {
 
   res.status(200).json({ ok: true, sent });
 }
+EOF

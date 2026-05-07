@@ -1,4 +1,3 @@
-cat > ~/daily-report-bot/pages/api/cron.js << 'EOF'
 import { getWorkspaceUsers, slackPost } from "../../lib/slack";
 
 export default async function handler(req, res) {

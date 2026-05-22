@@ -80,6 +80,45 @@ function buildModal(count) {
   };
 }
 
+async function formatWithClaude(userName, tasks) {
+  const taskList = tasks.map(t =>
+    `- ${t.name} | Status: ${t.status} | Hours: ${t.hours || "?"} | What was done: ${t.what || "not specified"}`
+  ).join("\n");
+
+  const prompt = `You are formatting a developer's daily work report for their manager.
+
+Developer: ${userName}
+Date: ${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
+
+Raw task data:
+${taskList}
+
+Write a clean, professional daily report in Slack markdown format. Rules:
+- Start with a one-line summary of the day
+- Then list each task with *Task ID and name* in bold, status emoji, what was accomplished, and time spent
+- End with a brief note on overall productivity or any blockers
+- Be concise but informative
+- Use Slack markdown: *bold*, _italic_
+- Do not invent details that weren't provided`;
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": process.env.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+
+  const data = await res.json();
+  return data.content?.[0]?.text || null;
+}
+
 async function handleBlockActions(payload, res) {
   const action = payload.actions?.[0];
 
@@ -102,26 +141,54 @@ async function handleViewSubmission(payload, res) {
   const count = parseInt(payload.view.private_metadata || "1");
   const userName = payload.user.name;
   const date = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-  const lines = [`*📋 Daily Report — ${date} — @${userName}*`];
 
+  const tasks = [];
   for (let n = 1; n <= count; n++) {
     const name = values[`task_${n}_name`]?.value?.value;
     if (!name) continue;
-    const status = values[`task_${n}_status`]?.value?.selected_option?.text?.text || "";
-    const what = values[`task_${n}_what`]?.value?.value || "";
-    const hours = values[`task_${n}_hours`]?.value?.value || "";
-    lines.push(`\n*${name}* · ${status}`);
-    if (what) lines.push(what);
-    if (hours) lines.push(`_⏱ ${hours}h_`);
+    tasks.push({
+      name,
+      status: values[`task_${n}_status`]?.value?.selected_option?.text?.text || "",
+      what: values[`task_${n}_what`]?.value?.value || "",
+      hours: values[`task_${n}_hours`]?.value?.value || "",
+    });
+  }
+
+  if (tasks.length === 0) {
+    return res.status(200).json({
+      response_action: "errors",
+      errors: { task_1_name: "Please fill in at least one task" },
+    });
+  }
+
+  // Try to format with Claude, fall back to plain format
+  let text;
+  try {
+    const formatted = await formatWithClaude(userName, tasks);
+    text = formatted
+      ? `*📋 Daily Report — ${date} — @${userName}*\n\n${formatted}`
+      : buildPlainReport(userName, date, tasks);
+  } catch {
+    text = buildPlainReport(userName, date, tasks);
   }
 
   await slackPost("chat.postMessage", {
     channel: process.env.SLACK_REPORT_CHANNEL,
-    text: lines.join("\n"),
-    blocks: [{ type: "section", text: { type: "mrkdwn", text: lines.join("\n") } }],
+    text,
+    blocks: [{ type: "section", text: { type: "mrkdwn", text } }],
   });
 
   return res.status(200).json({});
+}
+
+function buildPlainReport(userName, date, tasks) {
+  const lines = [`*📋 Daily Report — ${date} — @${userName}*`];
+  for (const t of tasks) {
+    lines.push(`\n*${t.name}* · ${t.status}`);
+    if (t.what) lines.push(t.what);
+    if (t.hours) lines.push(`_⏱ ${t.hours}h_`);
+  }
+  return lines.join("\n");
 }
 
 export default async function handler(req, res) {

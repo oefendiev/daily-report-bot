@@ -1,4 +1,7 @@
 import { slackPost } from "../../../lib/slack";
+import { Redis } from "@upstash/redis";
+
+const redis = Redis.fromEnv();
 
 export const config = { api: { bodyParser: false } };
 
@@ -9,6 +12,10 @@ function getRawBody(req) {
     req.on("end", () => resolve(body));
     req.on("error", reject);
   });
+}
+
+function getTaskId(name) {
+  return name.trim().split(" ")[0].toUpperCase();
 }
 
 function taskBlock(n, optional) {
@@ -119,6 +126,28 @@ Write a clean, professional daily report in Slack markdown format. Rules:
   return data.content?.[0]?.text || null;
 }
 
+async function getClosedTasks(userId) {
+  try {
+    const key = `closed:${userId}`;
+    const data = await redis.get(key);
+    return data ? JSON.parse(data) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveClosedTasks(userId, taskIds) {
+  try {
+    const key = `closed:${userId}`;
+    const existing = await getClosedTasks(userId);
+    const updated = [...new Set([...existing, ...taskIds])];
+    // Store for 30 days
+    await redis.set(key, JSON.stringify(updated), { ex: 60 * 60 * 24 * 30 });
+  } catch (e) {
+    console.error("Redis error:", e);
+  }
+}
+
 async function handleBlockActions(payload, res) {
   const action = payload.actions?.[0];
 
@@ -139,19 +168,40 @@ async function handleBlockActions(payload, res) {
 async function handleViewSubmission(payload, res) {
   const values = payload.view.state.values;
   const count = parseInt(payload.view.private_metadata || "1");
+  const userId = payload.user.id;
   const userName = payload.user.name;
   const date = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
+  // Get previously closed tasks for this user
+  const closedTasks = await getClosedTasks(userId);
+
   const tasks = [];
+  const errors = {};
+
   for (let n = 1; n <= count; n++) {
     const name = values[`task_${n}_name`]?.value?.value;
     if (!name) continue;
-    tasks.push({
-      name,
-      status: values[`task_${n}_status`]?.value?.selected_option?.text?.text || "",
-      what: values[`task_${n}_what`]?.value?.value || "",
-      hours: values[`task_${n}_hours`]?.value?.value || "",
-    });
+
+    const taskId = getTaskId(name);
+    const status = values[`task_${n}_status`]?.value?.selected_option?.text?.text || "";
+
+    // Check if task was already reported as Done
+    if (closedTasks.includes(taskId)) {
+      errors[`task_${n}_name`] = `${taskId} was already reported as Done previously`;
+    } else {
+      tasks.push({
+        name,
+        taskId,
+        status,
+        what: values[`task_${n}_what`]?.value?.value || "",
+        hours: values[`task_${n}_hours`]?.value?.value || "",
+      });
+    }
+  }
+
+  // Return validation errors if any
+  if (Object.keys(errors).length > 0) {
+    return res.status(200).json({ response_action: "errors", errors });
   }
 
   if (tasks.length === 0) {
@@ -161,7 +211,13 @@ async function handleViewSubmission(payload, res) {
     });
   }
 
-  // Try to format with Claude, fall back to plain format
+  // Save newly closed tasks to Redis
+  const newlyClosed = tasks.filter(t => t.status === "Done").map(t => t.taskId);
+  if (newlyClosed.length > 0) {
+    await saveClosedTasks(userId, newlyClosed);
+  }
+
+  // Format with Claude
   let text;
   try {
     const formatted = await formatWithClaude(userName, tasks);
